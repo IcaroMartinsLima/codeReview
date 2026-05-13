@@ -5,15 +5,18 @@ import threading
 import os
 import re
 import json
+from datetime import datetime
 from pathlib import Path
 from groq import Groq
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
-MODEL_NAME = "llama-3.3-16b"
+DEFAULT_MODEL = "llama-3.3-70b-versatile"
+MODEL_NAME = DEFAULT_MODEL
 MAX_RESPONSE_TOKENS = 800
 MAX_ADDED_LINES = 150
+TOKEN_HISTORY_FILE = Path(__file__).parent / "token_usage.json"
 
 
 def extract_added_lines(diff_text: str, max_lines: int = MAX_ADDED_LINES):
@@ -85,6 +88,45 @@ def format_added_lines(added_lines):
     )
 
 
+def load_usage_history():
+    if TOKEN_HISTORY_FILE.exists():
+        try:
+            return json.loads(TOKEN_HISTORY_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            save_usage_history([])
+            return []
+
+    save_usage_history([])
+    return []
+
+
+def save_usage_history(history):
+    TOKEN_HISTORY_FILE.write_text(json.dumps(history, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def extract_usage_from_response(resp):
+    usage = {}
+    if hasattr(resp, "usage"):
+        usage = getattr(resp, "usage") or {}
+    elif isinstance(resp, dict):
+        usage = resp.get("usage") or {}
+    elif hasattr(resp, "get"):
+        usage = resp.get("usage") or {}
+
+    if hasattr(usage, "to_dict"):
+        usage = usage.to_dict()
+    elif hasattr(usage, "__dict__") and not isinstance(usage, dict):
+        usage = dict(usage.__dict__)
+    elif not isinstance(usage, dict):
+        usage = {}
+
+    return {
+        "prompt_tokens": usage.get("prompt_tokens") or usage.get("promptTokens") or 0,
+        "completion_tokens": usage.get("completion_tokens") or usage.get("completionTokens") or 0,
+        "total_tokens": usage.get("total_tokens") or usage.get("totalTokens") or 0,
+    }
+
+
 ENV_FILE = Path(__file__).parent / ".env"
 
 TYPE_COLORS = {
@@ -126,9 +168,12 @@ class CodeReviewerApp(ctk.CTk):
         self.minsize(750, 550)
 
         self.api_key = tk.StringVar(value=load_api_key())
+        self.model_name = tk.StringVar(value=MODEL_NAME)
         self.uploaded_files = []
         self.all_issues = []
         self.current_filter = "all"
+        self.token_usage = {}
+        self.usage_history = load_usage_history()
 
         self._build_ui()
 
@@ -159,14 +204,34 @@ class CodeReviewerApp(ctk.CTk):
         self.main_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.main_frame.grid(row=1, column=0, sticky="nsew", padx=20, pady=16)
         self.main_frame.grid_columnconfigure(0, weight=1)
-        self.main_frame.grid_rowconfigure(2, weight=1)
+        self.main_frame.grid_rowconfigure(0, weight=1)
 
-        self._build_config_row()
-        self._build_upload_row()
-        self._build_results_area()
+        self.tabview = ctk.CTkTabview(self.main_frame, width=800, height=600)
+        self.tabview.grid(row=0, column=0, sticky="nsew")
 
-    def _build_config_row(self):
-        row = ctk.CTkFrame(self.main_frame, fg_color="transparent")
+        # Tab Revisão
+        review_tab = self.tabview.add("Revisão")
+        review_tab.grid_columnconfigure(0, weight=1)
+        review_tab.grid_rowconfigure(2, weight=1)
+
+        self._build_config_row(review_tab)
+        self._build_upload_row(review_tab)
+        self._build_results_area(review_tab)
+
+        # Tab Relatórios
+        reports_tab = self.tabview.add("Relatórios")
+        reports_tab.grid_columnconfigure(0, weight=1)
+        reports_tab.grid_rowconfigure(0, weight=1)
+
+        self.report_outer = ctk.CTkFrame(reports_tab, fg_color="transparent")
+        self.report_outer.grid(row=0, column=0, sticky="nsew")
+        self.report_outer.grid_columnconfigure(0, weight=1)
+        self.report_outer.grid_rowconfigure(0, weight=1)
+
+        self._render_report()
+
+    def _build_config_row(self, parent):
+        row = ctk.CTkFrame(parent, fg_color="transparent")
         row.grid(row=0, column=0, sticky="ew", pady=(0, 10))
         row.grid_columnconfigure(1, weight=1)
 
@@ -179,37 +244,45 @@ class CodeReviewerApp(ctk.CTk):
         )
         self.apikey_entry.grid(row=0, column=1, sticky="ew", padx=(0, 8))
 
+        ctk.CTkLabel(row, text="Modelo:", font=ctk.CTkFont(size=13)).grid(
+            row=0, column=3, padx=(12, 8), sticky="w")
+        self.model_entry = ctk.CTkEntry(
+            row, textvariable=self.model_name,
+            placeholder_text=DEFAULT_MODEL, width=260, height=36
+        )
+        self.model_entry.grid(row=0, column=4, sticky="w", padx=(0, 8))
+
         self.save_btn = ctk.CTkButton(
             row, text="💾 Salvar",
             width=90, height=36,
             fg_color="#1F2937", hover_color="#374151",
             font=ctk.CTkFont(size=12),
-            command=self._save_key
+            command=lambda: self._save_key(parent)
         )
         self.save_btn.grid(row=0, column=2)
 
         if load_api_key():
-            self._show_key_status("✓ Chave carregada do .env", "#4ADE80")
+            self._show_key_status("✓ Chave carregada do .env", "#4ADE80", parent)
 
-    def _save_key(self):
+    def _save_key(self, parent):
         key = self.api_key.get().strip()
         if not key:
             messagebox.showwarning("API Key", "Digite a API Key antes de salvar.")
             return
         save_api_key(key)
-        self._show_key_status("✓ Salvo em .env", "#4ADE80")
+        self._show_key_status("✓ Salvo em .env", "#4ADE80", parent)
 
-    def _show_key_status(self, msg, color):
+    def _show_key_status(self, msg, color, parent):
         if hasattr(self, "_key_status_label"):
             self._key_status_label.destroy()
         self._key_status_label = ctk.CTkLabel(
-            self.main_frame, text=msg,
+            parent, text=msg,
             font=ctk.CTkFont(size=11), text_color=color
         )
-        self._key_status_label.grid(row=0, column=0, sticky="e", pady=(0, 10))
+        self._key_status_label.grid(row=1, column=0, sticky="e", pady=(0, 10))
 
-    def _build_upload_row(self):
-        row = ctk.CTkFrame(self.main_frame, fg_color="transparent")
+    def _build_upload_row(self, parent):
+        row = ctk.CTkFrame(parent, fg_color="transparent")
         row.grid(row=1, column=0, sticky="ew", pady=(0, 12))
         row.grid_columnconfigure(1, weight=1)
 
@@ -233,8 +306,8 @@ class CodeReviewerApp(ctk.CTk):
         )
         self.review_btn.grid(row=0, column=2)
 
-    def _build_results_area(self):
-        self.results_outer = ctk.CTkFrame(self.main_frame, fg_color="transparent")
+    def _build_results_area(self, parent):
+        self.results_outer = ctk.CTkFrame(parent, fg_color="transparent")
         self.results_outer.grid(row=2, column=0, sticky="nsew")
         self.results_outer.grid_columnconfigure(0, weight=1)
         self.results_outer.grid_rowconfigure(1, weight=1)
@@ -254,6 +327,7 @@ class CodeReviewerApp(ctk.CTk):
         self.metrics_frame = ctk.CTkFrame(self.results_outer, fg_color="transparent")
         self.tab_frame = ctk.CTkFrame(self.results_outer, fg_color="transparent")
         self.scroll = ctk.CTkScrollableFrame(self.results_outer, fg_color="transparent")
+
 
     def pick_files(self):
         paths = filedialog.askopenfilenames(
@@ -294,7 +368,6 @@ class CodeReviewerApp(ctk.CTk):
 
         self.placeholder.grid_remove()
         self.metrics_frame.grid_remove()
-        self.tab_frame.grid_remove()
         self.scroll.grid_remove()
 
         self.loading_label.configure(text="⏳ Analisando diff com Groq...")
@@ -317,7 +390,7 @@ class CodeReviewerApp(ctk.CTk):
             diff_summary = format_added_lines(all_added)
             client = Groq(api_key=key)
             resp = client.chat.completions.create(
-                model=MODEL_NAME,
+                model=self.model_name.get().strip() or MODEL_NAME,
                 messages=build_review_messages(diff_summary),
                 temperature=0.1,
                 max_tokens=MAX_RESPONSE_TOKENS,
@@ -326,13 +399,27 @@ class CodeReviewerApp(ctk.CTk):
             clean = text.replace("```json", "").replace("```", "").strip()
             parsed = json.loads(clean)
             issues = parsed.get("issues", [])
+            usage = extract_usage_from_response(resp)
+            record = {
+                "timestamp": datetime.now().isoformat(timespec="seconds"),
+                "model": MODEL_NAME,
+                "prompt_tokens": usage["prompt_tokens"],
+                "completion_tokens": usage["completion_tokens"],
+                "total_tokens": usage["total_tokens"],
+                "issues": len(issues),
+                "files": len(self.uploaded_files),
+            }
+            self.token_usage = record
+            self.usage_history.append(record)
+            self.usage_history = self.usage_history[-20:]
+            save_usage_history(self.usage_history)
         except json.JSONDecodeError:
             issues = []
         except Exception as e:
-            self.after(0, lambda: self._show_error(str(e)))
+            self.after(0, self._show_error, str(e))
             return
 
-        self.after(0, lambda: self._show_results(issues))
+        self.after(0, self._show_results, issues)
 
     def _show_error(self, msg):
         self.loading_label.grid_remove()
@@ -341,13 +428,13 @@ class CodeReviewerApp(ctk.CTk):
 
     def _show_results(self, issues):
         self.all_issues = issues
-        self.current_filter = "all"
         self.loading_label.grid_remove()
         self.review_btn.configure(state="normal", text="Analisar ▶")
 
         self._build_metrics()
         self._build_tabs()
-        self._render_issues(issues)
+        self._filter(self.current_filter)
+        self._render_report()
 
     def _build_metrics(self):
         f = self.metrics_frame
@@ -382,12 +469,17 @@ class CodeReviewerApp(ctk.CTk):
             w.destroy()
 
         self.tab_btns = {}
-        tabs = [("all", "Todos"), ("bug", "🐛 Bugs"), ("quality", "✨ Qualidade"), ("performance", "⚡ Performance")]
+        tabs = [
+            ("all", "Todos"),
+            ("bug", "🐛 Bugs"),
+            ("quality", "✨ Qualidade"),
+            ("performance", "⚡ Performance"),
+        ]
         for key, label in tabs:
             btn = ctk.CTkButton(
                 f, text=label, height=32,
                 font=ctk.CTkFont(size=13),
-                fg_color="#3B82F6" if key == "all" else "transparent",
+                fg_color="#3B82F6" if key == self.current_filter else "transparent",
                 hover_color="#2563EB",
                 border_width=1, border_color="#374151",
                 command=lambda k=key: self._filter(k)
@@ -419,10 +511,115 @@ class CodeReviewerApp(ctk.CTk):
         for issue in issues:
             self._issue_card(self.scroll, issue)
 
+    def _render_report(self):
+        for w in self.report_outer.winfo_children():
+            w.destroy()
+
+        ctk.CTkLabel(
+            self.report_outer,
+            text="Relatório completo de tokens",
+            font=ctk.CTkFont(size=15, weight="bold"),
+            text_color="#F1F5F9"
+        ).grid(row=0, column=0, sticky="w", pady=(0, 8))
+
+        if not self.token_usage:
+            ctk.CTkLabel(
+                self.report_outer,
+                text="Nenhum relatório disponível ainda. Faça uma análise para gerar dados.",
+                text_color="#94A3B8",
+                font=ctk.CTkFont(size=13)
+            ).grid(row=1, column=0, sticky="w", pady=20)
+            return
+
+        summary_frame = ctk.CTkFrame(self.report_outer, fg_color=("#1E293B", "#1E293B"), corner_radius=12)
+        summary_frame.grid(row=1, column=0, sticky="ew", pady=(0, 12))
+        summary_frame.grid_columnconfigure((0, 1, 2, 3), weight=1)
+
+        cards = [
+            (self.token_usage["prompt_tokens"], "Prompt", "#60A5FA"),
+            (self.token_usage["completion_tokens"], "Completion", "#FBBF24"),
+            (self.token_usage["total_tokens"], "Total", "#A78BFA"),
+            (self.token_usage.get("issues", 0), "Issues", "#34D399"),
+        ]
+
+        for col, (value, label, color) in enumerate(cards):
+            card = ctk.CTkFrame(summary_frame, fg_color=("#111827", "#111827"), corner_radius=8)
+            card.grid(row=0, column=col, padx=4, sticky="ew")
+            ctk.CTkLabel(card, text=str(value), font=ctk.CTkFont(size=24, weight="bold"), text_color=color).pack(pady=(10, 0))
+            ctk.CTkLabel(card, text=label, font=ctk.CTkFont(size=12), text_color="#9CA3AF").pack(pady=(0, 10))
+
+        chart_frame = ctk.CTkFrame(self.report_outer, fg_color=("#111827", "#111827"), corner_radius=12)
+        chart_frame.grid(row=2, column=0, sticky="ew", pady=(0, 12))
+        chart_frame.grid_columnconfigure(0, weight=1)
+        chart_frame.grid_rowconfigure(0, weight=1)
+
+        canvas = tk.Canvas(chart_frame, height=220, bg="#0F172A", highlightthickness=0)
+        canvas.grid(row=0, column=0, sticky="nsew", padx=12, pady=12)
+        canvas.bind("<Configure>", lambda event: self._draw_usage_chart(canvas))
+        self._draw_usage_chart(canvas)
+
+        history_frame = ctk.CTkFrame(self.report_outer, fg_color=("#1E293B", "#1E293B"), corner_radius=12)
+        history_frame.grid(row=3, column=0, sticky="ew")
+        history_frame.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            history_frame,
+            text="Últimas análises",
+            font=ctk.CTkFont(size=14, weight="bold"),
+            text_color="#F1F5F9"
+        ).grid(row=0, column=0, sticky="w", pady=(10, 8), padx=10)
+
+        for index, record in enumerate(self.usage_history[-5:][::-1], start=1):
+            ctk.CTkLabel(
+                history_frame,
+                text=(f"{record['timestamp']} - Total: {record['total_tokens']} | "
+                      f"Prompt: {record['prompt_tokens']} | Completion: {record['completion_tokens']} | "
+                      f"Issues: {record['issues']}"),
+                text_color="#D1D5DB",
+                font=ctk.CTkFont(size=11),
+                wraplength=820,
+                anchor="w"
+            ).grid(row=index, column=0, sticky="w", padx=10, pady=2)
+
+        ctk.CTkLabel(
+            self.report_outer,
+            text="Histórico salvo em token_usage.json",
+            text_color="#6B7280",
+            font=ctk.CTkFont(size=11),
+        ).grid(row=4, column=0, sticky="w", pady=(10, 10), padx=10)
+
+    def _draw_usage_chart(self, canvas):
+        canvas.delete("all")
+        if not self.token_usage:
+            return
+
+        metrics = [
+            ("Prompt", self.token_usage["prompt_tokens"], "#60A5FA"),
+            ("Completion", self.token_usage["completion_tokens"], "#FBBF24"),
+            ("Total", self.token_usage["total_tokens"], "#A78BFA"),
+        ]
+        width = canvas.winfo_width() or 400
+        height = canvas.winfo_height() or 220
+        max_val = max([value for _, value, _ in metrics] + [1])
+        padding = 36
+        available_width = width - padding * 2
+        gap = 24
+        bar_width = (available_width - gap * (len(metrics) - 1)) / len(metrics)
+
+        for idx, (label, value, color) in enumerate(metrics):
+            x0 = padding + idx * (bar_width + gap)
+            x1 = x0 + bar_width
+            bar_height = int((height - 90) * (value / max_val))
+            y0 = height - 40 - bar_height
+            y1 = height - 40
+            canvas.create_rectangle(x0, y0, x1, y1, fill=color, outline="")
+            canvas.create_text((x0 + x1) / 2, y0 - 12, text=str(value), fill="#F8FAFC", font=("Arial", 10, "bold"))
+            canvas.create_text((x0 + x1) / 2, height - 18, text=label, fill="#9CA3AF", font=("Arial", 10))
+
     def _issue_card(self, parent, issue):
-        itype  = issue.get("type", "quality")
+        itype = issue.get("type", "quality")
         accent, bg = TYPE_COLORS.get(itype, ("#60A5FA", "#0A1628"))
-        sev    = issue.get("severity", "medium")
+        sev = issue.get("severity", "medium")
 
         card = ctk.CTkFrame(parent, fg_color=("#1E293B", "#1E293B"), corner_radius=10)
         card.pack(fill="x", pady=4, padx=2)
