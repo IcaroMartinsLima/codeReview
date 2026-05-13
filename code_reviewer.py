@@ -3,12 +3,87 @@ import tkinter as tk
 from tkinter import filedialog, messagebox
 import threading
 import os
+import re
 import json
 from pathlib import Path
 from groq import Groq
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
+
+MODEL_NAME = "llama-3.3-16b"
+MAX_RESPONSE_TOKENS = 800
+MAX_ADDED_LINES = 150
+
+
+def extract_added_lines(diff_text: str, max_lines: int = MAX_ADDED_LINES):
+    added = []
+    current_file = None
+    new_line_number = None
+
+    for raw in diff_text.splitlines():
+        if raw.startswith("diff --git"):
+            current_file = None
+            new_line_number = None
+            continue
+
+        if raw.startswith("+++ "):
+            path = raw[4:].strip()
+            if path.startswith("b/"):
+                path = path[2:]
+            current_file = path
+            continue
+
+        if raw.startswith("@@"):
+            match = re.search(r"\+(\d+)(?:,(\d+))?", raw)
+            if match:
+                new_line_number = int(match.group(1))
+            continue
+
+        if raw.startswith("+") and not raw.startswith("+++"):
+            if current_file and new_line_number is not None:
+                added.append((current_file, new_line_number, raw[1:]))
+                new_line_number += 1
+                if len(added) >= max_lines:
+                    break
+            continue
+
+        if raw.startswith(" ") and new_line_number is not None:
+            new_line_number += 1
+            continue
+
+    return added
+
+
+def build_review_messages(diff_summary: str):
+    return [
+        {
+            "role": "system",
+            "content": (
+                "Você é um revisor de código sênior. Responda apenas com JSON válido sem explicações extras."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                "Analise apenas as linhas de adição (+) abaixo. Ignore remoções e contexto. "
+                "Retorne um objeto JSON com a chave issues, onde cada item tem: "
+                'type, severity, file, line, title, description, suggestion, snippet. '
+                "Use type: bug, quality, performance e severity: high, medium, low. "
+                "Retorne entre 3 e 10 issues.\n\n"
+                + diff_summary
+            ),
+        },
+    ]
+
+
+def format_added_lines(added_lines):
+    return "\n".join(
+        f"+ {filename}:{line_number}: {content.strip()}"
+        for filename, line_number, content in added_lines
+        if content.strip()
+    )
+
 
 ENV_FILE = Path(__file__).parent / ".env"
 
@@ -230,32 +305,22 @@ class CodeReviewerApp(ctk.CTk):
 
     def _run_review(self, key):
         try:
-            parts = []
+            all_added = []
             for path in self.uploaded_files:
                 with open(path, "r", encoding="utf-8", errors="replace") as f:
-                    diff_content = f.read(8000)
-                parts.append(f"### Diff: {os.path.basename(path)}\n```diff\n{diff_content}\n```")
-            combined = "\n\n".join(parts)
+                    diff_text = f.read()
+                all_added.extend(extract_added_lines(diff_text))
 
+            if not all_added:
+                raise ValueError("Nenhuma adição encontrada no diff selecionado.")
+
+            diff_summary = format_added_lines(all_added)
             client = Groq(api_key=key)
             resp = client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
-                messages=[{
-                    "role": "user",
-                    "content": (
-                        "Você é um revisor de código sênior. Analise o diff abaixo e retorne APENAS um JSON válido, sem markdown, sem texto fora do JSON.\n\n"
-                        "Analise SOMENTE as linhas com + (adições novas). Ignore linhas com - e linhas de contexto.\n\n"
-                        "Formato:\n"
-                        '{"issues":[{"type":"bug"|"quality"|"performance","severity":"high"|"medium"|"low",'
-                        '"file":"arquivo modificado","line":"linha no diff","title":"título curto",'
-                        '"description":"explicação do problema na mudança","suggestion":"como corrigir",'
-                        '"snippet":"linha problemática sem o sinal de +"}]}\n\n'
-                        "Retorne entre 3 e 10 problemas encontrados nas mudanças. Foque em: bugs, qualidade/boas práticas, performance.\n\n"
-                        + combined
-                    )
-                }],
-                temperature=0.2,
-                max_tokens=2000,
+                model=MODEL_NAME,
+                messages=build_review_messages(diff_summary),
+                temperature=0.1,
+                max_tokens=MAX_RESPONSE_TOKENS,
             )
             text = resp.choices[0].message.content.strip()
             clean = text.replace("```json", "").replace("```", "").strip()
