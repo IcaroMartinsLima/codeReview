@@ -10,7 +10,9 @@ from .components.config_row import ConfigRow
 from .components.upload_row import UploadRow
 from .components.issue_card import create_issue_card
 from .components.report_panel import ReportPanel
+from .components.settings_panel import SettingsPanel
 from .constants import DEFAULT_MODEL
+from .settings import load_settings
 
 
 class CodeReviewerApp(ctk.CTk):
@@ -29,6 +31,7 @@ class CodeReviewerApp(ctk.CTk):
         self.all_issues   = []
         self.current_filter = "all"
         self.token_usage  = {}
+        self.prompt_settings = load_settings()
         try:
             self.usage_history = load_usage_history() or []
         except Exception:
@@ -107,6 +110,20 @@ class CodeReviewerApp(ctk.CTk):
         self.report_panel = ReportPanel(reports_tab, usage_history=self.usage_history)
         self.report_panel.grid(row=0, column=0, sticky="nsew")
 
+        settings_tab = self.tabview.add("⚙ Configurações")
+        settings_tab.grid_columnconfigure(0, weight=1)
+        settings_tab.grid_rowconfigure(0, weight=1)
+
+        scroll_settings = ctk.CTkScrollableFrame(settings_tab, fg_color="transparent")
+        scroll_settings.grid(row=0, column=0, sticky="nsew")
+        scroll_settings.grid_columnconfigure(0, weight=1)
+
+        self.settings_panel = SettingsPanel(
+            scroll_settings,
+            on_save=self._on_settings_saved,
+        )
+        self.settings_panel.grid(row=0, column=0, sticky="ew", padx=4, pady=4)
+
     def _build_results_area(self, parent):
         self.results_outer = ctk.CTkFrame(parent, fg_color="transparent")
         self.results_outer.grid(row=2, column=0, sticky="nsew")
@@ -153,6 +170,9 @@ class CodeReviewerApp(ctk.CTk):
             self.uploaded_files.pop(remove_index)
             self.upload_row.set_files(self.uploaded_files)
 
+    def _on_settings_saved(self, new_settings: dict):
+        self.prompt_settings = new_settings
+
     def start_review(self):
         key = self.api_key.get().strip()
         if not key:
@@ -168,11 +188,17 @@ class CodeReviewerApp(ctk.CTk):
         self.loading_label.grid(row=0, column=0, pady=60)
         self.upload_row.review_btn.configure(state="disabled", text="Analisando…")
 
-        threading.Thread(target=self._run_review, args=(key,), daemon=True).start()
+        threading.Thread(
+            target=self._run_review,
+            args=(key, dict(self.prompt_settings)),
+            daemon=True,
+        ).start()
 
-    def _run_review(self, key):
+    def _run_review(self, key, settings):
         try:
-            issues, usage_record = review_diff_files(key, self.model_name.get(), self.uploaded_files)
+            issues, usage_record = review_diff_files(
+                key, self.model_name.get(), self.uploaded_files, settings=settings
+            )
             self.token_usage   = usage_record or {}
             try:
                 self.usage_history = load_usage_history() or []

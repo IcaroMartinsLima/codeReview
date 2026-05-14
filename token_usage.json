@@ -52,5 +52,38 @@
     "total_tokens": 4488,
     "issues": 5,
     "files": 1
+  },
+  {
+    "timestamp": "2026-05-14T18:53:39",
+    "model": "llama-3.3-70b-versatile",
+    "prompt_tokens": 3846,
+    "completion_tokens": 664,
+    "total_tokens": 4510,
+    "issues": 5,
+    "files": 1,
+    "tone": "direto",
+    "language": "pt",
+    "focus": [
+      "bugs",
+      "performance",
+      "quality",
+      "security"
+    ],
+    "max_issues": 8
+  },
+  {
+    "timestamp": "2026-05-14T18:56:35",
+    "model": "llama-3.3-70b-versatile",
+    "prompt_tokens": 3958,
+    "completion_tokens": 435,
+    "total_tokens": 4393,
+    "issues": 3,
+    "files": 1,
+    "tone": "direto",
+    "language": "pt",
+    "focus": [
+      "bug"
+    ],
+    "max_issues": 3
   }
 ]

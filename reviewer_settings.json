@@ -1,0 +1,8 @@
+{
+  "tone": "direto",
+  "language": "pt",
+  "focus": [
+    "bug"
+  ],
+  "max_issues": 3
+}
