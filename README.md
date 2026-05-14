@@ -38,7 +38,7 @@ Digite a chave no campo do app e clique em **💾 Salvar** — ela será gravada
 ## 3. Rodar o app
 
 ```cmd
-python code_reviewer.py
+python -m code_reviewer
 ```
 
 ---
@@ -59,7 +59,7 @@ C:\Users\icaro\AppData\Local\Programs\Python\Python313\Lib\site-packages\customt
 **Passo 2** — Gere o executável substituindo o caminho pelo que apareceu acima:
 
 ```cmd
-python -m PyInstaller --onefile --windowed --name "CodeReviewer" --add-data "C:\Users\icaro\AppData\Local\Programs\Python\Python313\Lib\site-packages\customtkinter;customtkinter" code_reviewer.py
+python -m PyInstaller --onefile --windowed --name "CodeReviewer" --add-data "C:\Users\icaro\AppData\Local\Programs\Python\Python313\Lib\site-packages\customtkinter;customtkinter" code_reviewer/main.py
 ```
 
 O `.exe` será gerado em:
