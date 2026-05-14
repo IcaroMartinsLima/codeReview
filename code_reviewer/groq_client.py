@@ -20,7 +20,7 @@ def build_review_messages(diff_summary: str):
                 "Retorne um objeto JSON com a chave issues, onde cada item tem: "
                 "type, severity, file, line, title, description, suggestion, snippet. "
                 "Use type: bug, quality, performance e severity: high, medium, low. "
-                "Retorne entre 3 e 10 issues.\n\n"
+                "Retorne entre 3 e 10 issues.\n\n",
                 + diff_summary
             ),
         },

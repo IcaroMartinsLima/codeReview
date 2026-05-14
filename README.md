@@ -2,6 +2,9 @@
 
 App de code review de diffs usando Groq API + interface gráfica em Python.
 
+## Gerar arquivo diff
+- git diff dev -w > C:\icaro\diffs\NomeDoArquivo.diff
+
 ## Pré-requisitos
 
 - Python 3.13 instalado com a opção **"Add python.exe to PATH"** marcada
