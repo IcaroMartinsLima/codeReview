@@ -7,3 +7,8 @@ __pycache__/
 
 # Token usage
 token_usage.json
+
+# build
+\build
+\dist
+CodeReviewer.spec
