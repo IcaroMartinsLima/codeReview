@@ -85,5 +85,25 @@
       "bug"
     ],
     "max_issues": 3
+  },
+  {
+    "timestamp": "2026-05-15T10:15:22",
+    "model": "llama-3.3-70b-versatile",
+    "prompt_tokens": 3717,
+    "completion_tokens": 405,
+    "total_tokens": 4122,
+    "issues": 3,
+    "files": 1,
+    "tone": "direto",
+    "language": "pt",
+    "focus": [
+      "bug"
+    ],
+    "max_issues": 3,
+    "preprocess_original_lines": 439,
+    "preprocess_final_lines": 178,
+    "preprocess_savings_pct": 59.5,
+    "preprocess_dropped_hunks": 1,
+    "preprocess_summarized": 2
   }
 ]

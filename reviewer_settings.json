@@ -2,7 +2,10 @@
   "tone": "direto",
   "language": "pt",
   "focus": [
-    "bug"
+    "bug",
+    "performance",
+    "quality",
+    "security"
   ],
-  "max_issues": 3
+  "max_issues": 8
 }

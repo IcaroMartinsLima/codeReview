@@ -196,10 +196,11 @@ class CodeReviewerApp(ctk.CTk):
 
     def _run_review(self, key, settings):
         try:
-            issues, usage_record = review_diff_files(
+            issues, usage_record, preprocess_stats = review_diff_files(
                 key, self.model_name.get(), self.uploaded_files, settings=settings
             )
-            self.token_usage   = usage_record or {}
+            self.token_usage       = usage_record or {}
+            self.preprocess_stats  = preprocess_stats or {}
             try:
                 self.usage_history = load_usage_history() or []
             except Exception:
